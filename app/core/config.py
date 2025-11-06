@@ -5,14 +5,14 @@ Inherits from oxsci_shared_core.config.BaseConfig for standard configuration man
 Add MCP-server-specific configurations here.
 """
 
-try:
-    from oxsci_shared_core.config import base_config as config
-except ImportError:
-    # Fallback for development without shared-core
-    from pydantic_settings import BaseSettings
+from oxsci_shared_core.config import BaseConfig
 
-    class Config(BaseSettings):
-        SERVICE_NAME: str = "mcp-server-template"
-        ENV: str = "local"
 
-    config = Config()
+class Config(BaseConfig):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    SERVICE_PORT: int = 8060
+
+
+config = Config()

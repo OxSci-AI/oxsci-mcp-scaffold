@@ -10,7 +10,7 @@ import logging
 
 from oxsci_oma_mcp import tool_router
 
-from .config import config
+from app.core.config import config
 
 # Configure logging
 logging.basicConfig(

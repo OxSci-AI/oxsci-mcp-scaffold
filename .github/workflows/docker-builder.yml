@@ -51,9 +51,9 @@ jobs:
   build-and-push:
     name: Build & Push MCP Server
     needs: read-service-name
-    uses: OxSci-AI/oxsci-deploy/.github/workflows/reusable-agent-docker-build.yml@main
+    uses: OxSci-AI/oxsci-deploy/.github/workflows/reusable-mcp-docker-build.yml@main
     with:
-      agent_name: ${{ needs.read-service-name.outputs.service_name }}
+      mcp_name: ${{ needs.read-service-name.outputs.service_name }}
       enable_codeartifact: true
       auto_version: ${{ inputs.auto_version }}
       pump_version: ${{ inputs.pump_version }}
@@ -62,9 +62,9 @@ jobs:
     name: Deploy MCP Server to Test
     needs: [read-service-name, build-and-push]
     if: ${{ (inputs.deploy_to_test == true || inputs.deploy_to_test == null) && !startsWith(github.ref, 'refs/tags/') }}
-    uses: OxSci-AI/oxsci-deploy/.github/workflows/reusable-agent-deploy.yml@main
+    uses: OxSci-AI/oxsci-deploy/.github/workflows/reusable-mcp-deploy.yml@main
     with:
-      agent_name: ${{ needs.read-service-name.outputs.service_name }}
+      mcp_name: ${{ needs.read-service-name.outputs.service_name }}
       image_tag: ${{ github.sha }}
       image_version: ${{ needs.build-and-push.outputs.version }}
       environment: test

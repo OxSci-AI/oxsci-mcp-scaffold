@@ -7,6 +7,7 @@ This guide covers how to develop, configure, and deploy MCP tools using the oxsc
 - [Creating a New Tool](#creating-a-new-tool)
 - [Tool Registration](#tool-registration)
 - [Tool Discovery Behavior](#tool-discovery-behavior)
+- [Authentication Forwarding](#authentication-forwarding)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Deployment](#deployment)
@@ -27,7 +28,7 @@ This guide covers how to develop, configure, and deploy MCP tools using the oxsc
 
 ```python
 # app/tools/my_tool.py
-from fastapi import Depends
+from fastapi import Depends, Request
 from pydantic import BaseModel, Field
 from oxsci_oma_mcp import oma_tool, require_context, IMCPToolContext
 
@@ -48,8 +49,9 @@ class MyToolResponse(BaseModel):
     enable=True,  # Set to False to disable from agent discovery
 )
 async def my_tool(
-    request: MyToolRequest,
+    request: MyToolRequest,  # Business parameters (Pydantic model)
     context: IMCPToolContext = Depends(require_context),
+    fastapi_request: Request = None,  # Optional: FastAPI Request for auth forwarding
 ) -> MyToolResponse:
     """
     Tool implementation.
@@ -57,6 +59,7 @@ async def my_tool(
     Args:
         request: Tool request parameters
         context: MCP context for accessing shared data
+        fastapi_request: Optional FastAPI Request object for authentication forwarding
 
     Returns:
         MyToolResponse with processed result
@@ -72,6 +75,8 @@ async def my_tool(
 
     return MyToolResponse(result=result)
 ```
+
+**Note**: The `fastapi_request` parameter is optional and automatically injected by the framework. Include it only when your tool needs to call downstream services with authentication.
 
 ### Comprehensive Example
 
@@ -104,6 +109,104 @@ This allows you to:
 - Keep tools in development hidden from agents
 - Temporarily disable tools without removing code
 - Maintain internal-only tools
+
+## Authentication Forwarding
+
+### Overview
+
+When your tool needs to call downstream services (e.g., data-service, llm-service), you should forward the caller's authentication to maintain the security context throughout the request chain.
+
+### How It Works
+
+The `fastapi_request: Request` parameter is automatically injected with the FastAPI Request object, which contains authentication headers from the caller (user token or service token).
+
+### Example: Tool with Authentication Forwarding
+
+```python
+from fastapi import Depends, Request
+from pydantic import BaseModel, Field
+from oxsci_oma_mcp import oma_tool, require_context, IMCPToolContext
+from oxsci_shared_core.auth_service import ServiceClient
+from app.core.config import config
+
+
+class ProcessDocumentRequest(BaseModel):
+    """Request model for document processing"""
+    document_id: str = Field(..., description="Document ID to process")
+    options: dict = Field(default_factory=dict, description="Processing options")
+
+
+class ProcessDocumentResponse(BaseModel):
+    """Response model for document processing"""
+    result: str = Field(..., description="Processing result")
+    metadata: dict = Field(..., description="Document metadata")
+
+
+@oma_tool(
+    description="Process document with data service integration",
+    version="1.0.0",
+    enable=True
+)
+async def process_document(
+    request: ProcessDocumentRequest,
+    context: IMCPToolContext = Depends(require_context),
+    fastapi_request: Request = None  # Auto-injected for auth forwarding
+) -> ProcessDocumentResponse:
+    """
+    Process document by calling data service with authentication forwarding.
+
+    The fastapi_request parameter contains authentication info from the caller
+    and is automatically forwarded to downstream services.
+    """
+    # Initialize service client
+    service_client = ServiceClient(config.SERVICE_NAME)
+
+    # Call data service with authentication forwarding
+    # The user_request parameter ensures auth tokens are passed through
+    doc_data = await service_client.call_service(
+        target_service_url=config.DATA_SERVICE_URL,
+        method="GET",
+        endpoint=f"/documents/{request.document_id}",
+        user_request=fastapi_request  # ✅ Forward authentication
+    )
+
+    # Process the document
+    result = f"Processed document: {doc_data['title']}"
+
+    # Store in context for tool chaining
+    context.set_shared_data("last_doc_id", request.document_id)
+
+    return ProcessDocumentResponse(
+        result=result,
+        metadata=doc_data.get("metadata", {})
+    )
+```
+
+### Authentication Flow
+
+```
+1. Caller → POST /tools/process_document (with Authorization header)
+2. tool_router → Receives request with authentication in fastapi_request
+3. tool_router → Injects fastapi_request into tool function
+4. Tool → Calls service_client.call_service(..., user_request=fastapi_request)
+5. ServiceClient → Forwards authentication to downstream service
+6. Downstream Service → Validates and processes with original auth context
+```
+
+### Benefits
+
+✅ **Seamless auth propagation** across service boundaries
+✅ **No manual token extraction** required
+✅ **Maintains security context** throughout the request chain
+✅ **Supports both user and service tokens**
+✅ **Complies with Oxsci.AI development standards**
+
+### Important Notes
+
+- The `fastapi_request` parameter is **optional** and only needed when calling downstream services
+- The parameter is **automatically injected** by the framework
+- The parameter name can be anything, but `fastapi_request` is recommended for clarity
+- The parameter is **excluded from tool schema** (not visible in `/tools/discover`)
 
 ## Configuration
 
@@ -241,27 +344,111 @@ oxsci-oma-mcp = { version = ">=0.1.0", source = "oxsci-ca" }
 
 ### External Service Integration
 
-Use `oxsci-shared-core` for calling other services:
+When calling downstream services, **always forward authentication** using the `user_request` parameter:
 
 ```python
+from fastapi import Request, Depends
 from oxsci_shared_core.auth_service import ServiceClient
+from oxsci_oma_mcp import oma_tool, require_context, IMCPToolContext
+from app.core.config import config
 
-service_client = ServiceClient("my-mcp-server")
-data = await service_client.call_service(
-    target_service_url="https://data-service.example.com",
-    method="GET",
-    endpoint="/data/items"
-)
+@oma_tool(description="Example tool calling external services")
+async def my_tool(
+    request: MyToolRequest,
+    context: IMCPToolContext = Depends(require_context),
+    fastapi_request: Request = None  # Required for auth forwarding
+) -> MyToolResponse:
+    # Initialize service client
+    service_client = ServiceClient(config.SERVICE_NAME)
+
+    # ✅ CORRECT: Forward authentication
+    data = await service_client.call_service(
+        target_service_url=config.DATA_SERVICE_URL,
+        method="GET",
+        endpoint="/data/items",
+        user_request=fastapi_request  # ✅ Forward auth
+    )
+
+    # ❌ INCORRECT: Don't call services without auth forwarding
+    # This will fail authentication on downstream services
+    # data = await service_client.call_service(
+    #     target_service_url=config.DATA_SERVICE_URL,
+    #     method="GET",
+    #     endpoint="/data/items"
+    # )
+
+    return MyToolResponse(data=data)
 ```
+
+**Key Points:**
+
+- **Always** include `fastapi_request: Request = None` parameter when calling downstream services
+- **Always** pass `user_request=fastapi_request` to `service_client.call_service()`
+- This ensures authentication tokens (user or service) are properly forwarded
+- Failing to forward auth will result in 401/403 errors from downstream services
 
 ### Best Practices
 
 1. **Request/Response Models**: Always define clear Pydantic models with descriptions
-2. **Error Handling**: Use appropriate exception handling and return meaningful errors
-3. **Context Usage**: Leverage the MCP context for sharing data between tools in a chain
-4. **Testing**: Write tests for your tools before deploying
-5. **Documentation**: Keep your tool descriptions clear and accurate for agent discovery
-6. **Versioning**: Use semantic versioning for your tools
+   ```python
+   class MyToolRequest(BaseModel):
+       param: str = Field(..., description="Clear description")
+   ```
+
+2. **Authentication Forwarding**: Always include `fastapi_request: Request = None` when calling downstream services
+   ```python
+   @oma_tool(...)
+   async def my_tool(
+       request: MyToolRequest,
+       context: IMCPToolContext = Depends(require_context),
+       fastapi_request: Request = None  # Required for service calls
+   ):
+       await service_client.call_service(
+           ...,
+           user_request=fastapi_request  # Forward auth
+       )
+   ```
+
+3. **Error Handling**: Use appropriate exception handling and return meaningful errors
+   - Don't catch `HTTPException` - let them propagate to maintain HTTP status codes
+   - Handle business logic errors appropriately
+   ```python
+   try:
+       data = await service_client.call_service(...)
+   except HTTPException:
+       raise  # Re-raise HTTP exceptions to preserve status codes
+   except Exception as e:
+       logger.error(f"Tool error: {e}")
+       raise
+   ```
+
+4. **Context Usage**: Leverage the MCP context for sharing data between tools in a chain
+   ```python
+   # Store data for next tools
+   context.set_shared_data("result", my_result)
+   # Read data from previous tools
+   prev_result = context.get_shared_data("result", default=None)
+   ```
+
+5. **Testing**: Write tests for your tools before deploying
+   - Unit tests for tool logic
+   - Integration tests for service calls
+   - Mock downstream services appropriately
+
+6. **Documentation**: Keep your tool descriptions clear and accurate for agent discovery
+   - Write clear `description` in `@oma_tool`
+   - Add comprehensive docstrings
+   - Use descriptive Field descriptions
+
+7. **Versioning**: Use semantic versioning for your tools
+   - Increment PATCH for bug fixes
+   - Increment MINOR for new features
+   - Increment MAJOR for breaking changes
+
+8. **Parameter Naming**: Follow consistent naming conventions
+   - `request`: For Pydantic business parameters
+   - `context`: For MCP context (use `Depends(require_context)`)
+   - `fastapi_request`: For FastAPI Request object (optional, for auth forwarding)
 
 ## Related Projects
 

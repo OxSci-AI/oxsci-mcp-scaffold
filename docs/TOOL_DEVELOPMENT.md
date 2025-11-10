@@ -344,7 +344,78 @@ oxsci-oma-mcp = { version = ">=0.1.0", source = "oxsci-ca" }
 
 ### External Service Integration
 
-When calling downstream services, **always forward authentication** using the `user_request` parameter:
+#### Using DataServiceClient (Recommended - oxsci-oma-mcp >= 0.2.0)
+
+For calling the data service, use the injected `IDataServiceClient` from `oxsci-oma-mcp` for simplified and consistent API calls:
+
+```python
+from fastapi import Depends
+from oxsci_oma_mcp import (
+    oma_tool,
+    require_context,
+    IMCPToolContext,
+    IDataServiceClient,
+    require_data_service,
+)
+
+@oma_tool(description="Example tool using DataServiceClient")
+async def my_tool(
+    request: MyToolRequest,
+    context: IMCPToolContext = Depends(require_context),
+    data_service: IDataServiceClient = Depends(require_data_service)
+) -> MyToolResponse:
+    # ✅ RECOMMENDED: Use injected IDataServiceClient
+    # Simple GET request
+    data = await data_service.call(
+        method="GET",
+        endpoint="/documents/123"
+    )
+
+    # GET with query parameters
+    sections = await data_service.call(
+        method="GET",
+        endpoint="/article_structured_contents/overviews/{overview_id}/sections",
+        path_params={"overview_id": "some_id"},
+        query_params={"user_id": "user123"}
+    )
+
+    # POST with JSON body
+    created = await data_service.call(
+        method="POST",
+        endpoint="/documents",
+        json_data={"title": "New Document", "content": "..."}
+    )
+
+    return MyToolResponse(data=data)
+```
+
+**Benefits of IDataServiceClient:**
+
+✅ **Automatic injection** - Provided by oxsci-oma-mcp, no manual setup needed
+✅ **Pre-configured** - DATA_SERVICE_URL automatically loaded from config
+✅ **Authentication auto-forwarded** - No need to pass user_request
+✅ **Single instance per request** - Reused across multiple calls in same tool
+✅ **Clean API** - Only specify method and endpoint
+✅ **Less boilerplate** - Reduces code by ~60% compared to manual ServiceClient
+✅ **Consistent pattern** - Same injection pattern as require_context
+
+**How it works:**
+
+1. The `tool_router` in oxsci-oma-mcp automatically creates a `DataServiceClient` at the start of each request
+2. It reads `DATA_SERVICE_URL` and `SERVICE_NAME` from your config
+3. It passes the FastAPI Request object for authentication forwarding
+4. The client is stored in a ContextVar and injected via `require_data_service()`
+5. After request completion, the client is automatically cleaned up
+
+**Requirements:**
+
+- oxsci-oma-mcp >= 0.2.0 (includes IDataServiceClient)
+- `DATA_SERVICE_URL` configured in your config
+- `SERVICE_NAME` configured in your config
+
+#### Using ServiceClient Directly (For Other Services)
+
+For services other than data service, use ServiceClient with authentication forwarding:
 
 ```python
 from fastapi import Request, Depends
@@ -352,7 +423,7 @@ from oxsci_shared_core.auth_service import ServiceClient
 from oxsci_oma_mcp import oma_tool, require_context, IMCPToolContext
 from app.core.config import config
 
-@oma_tool(description="Example tool calling external services")
+@oma_tool(description="Example tool calling other services")
 async def my_tool(
     request: MyToolRequest,
     context: IMCPToolContext = Depends(require_context),
@@ -363,18 +434,18 @@ async def my_tool(
 
     # ✅ CORRECT: Forward authentication
     data = await service_client.call_service(
-        target_service_url=config.DATA_SERVICE_URL,
+        target_service_url=config.LLM_SERVICE_URL,  # Or other service URL
         method="GET",
-        endpoint="/data/items",
+        endpoint="/models",
         user_request=fastapi_request  # ✅ Forward auth
     )
 
     # ❌ INCORRECT: Don't call services without auth forwarding
     # This will fail authentication on downstream services
     # data = await service_client.call_service(
-    #     target_service_url=config.DATA_SERVICE_URL,
+    #     target_service_url=config.LLM_SERVICE_URL,
     #     method="GET",
-    #     endpoint="/data/items"
+    #     endpoint="/models"
     # )
 
     return MyToolResponse(data=data)
@@ -382,8 +453,9 @@ async def my_tool(
 
 **Key Points:**
 
-- **Always** include `fastapi_request: Request = None` parameter when calling downstream services
-- **Always** pass `user_request=fastapi_request` to `service_client.call_service()`
+- **For data service**: Use `DataServiceClient` with `Depends(require_data_service)` (recommended)
+- **For other services**: Use `ServiceClient` with `fastapi_request: Request = None` parameter
+- **Always** pass `user_request=fastapi_request` to `service_client.call_service()` when using ServiceClient directly
 - This ensures authentication tokens (user or service) are properly forwarded
 - Failing to forward auth will result in 401/403 errors from downstream services
 
@@ -395,7 +467,24 @@ async def my_tool(
        param: str = Field(..., description="Clear description")
    ```
 
-2. **Authentication Forwarding**: Always include `fastapi_request: Request = None` when calling downstream services
+2. **Data Service Calls**: Use the injected `IDataServiceClient` from oxsci-oma-mcp for cleaner code
+   ```python
+   from oxsci_oma_mcp import IDataServiceClient, require_data_service
+
+   @oma_tool(...)
+   async def my_tool(
+       request: MyToolRequest,
+       context: IMCPToolContext = Depends(require_context),
+       data_service: IDataServiceClient = Depends(require_data_service)
+   ):
+       # Clean and simple - no need for ServiceClient creation or auth forwarding
+       data = await data_service.call(
+           method="GET",
+           endpoint="/documents/123"
+       )
+   ```
+
+3. **Other Service Calls**: Always include `fastapi_request: Request = None` when calling non-data services
    ```python
    @oma_tool(...)
    async def my_tool(
@@ -403,7 +492,9 @@ async def my_tool(
        context: IMCPToolContext = Depends(require_context),
        fastapi_request: Request = None  # Required for service calls
    ):
+       service_client = ServiceClient(config.SERVICE_NAME)
        await service_client.call_service(
+           target_service_url=config.LLM_SERVICE_URL,
            ...,
            user_request=fastapi_request  # Forward auth
        )

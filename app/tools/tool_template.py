@@ -26,7 +26,13 @@ from typing import Optional, List
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from oxsci_oma_mcp import oma_tool, require_context, IMCPToolContext
+from oxsci_oma_mcp import (
+    oma_tool,
+    require_context,
+    IMCPToolContext,
+    IDataServiceClient,
+    require_data_service,
+)
 
 
 # ==================== Request/Response Models ====================
@@ -123,6 +129,7 @@ class ToolTemplateResponse(BaseModel):
 async def tool_template(
     request: ToolTemplateRequest,
     context: IMCPToolContext = Depends(require_context),
+    data_service: IDataServiceClient = Depends(require_data_service),
 ) -> ToolTemplateResponse:
     """
     Comprehensive tool template implementation.
@@ -130,6 +137,7 @@ async def tool_template(
     This tool demonstrates:
     - Different parameter types (required, optional, with defaults)
     - Context usage for tool chaining
+    - DataServiceClient usage for simplified data service calls
     - Proper error handling
     - Metadata tracking
     - Business logic implementation
@@ -139,9 +147,16 @@ async def tool_template(
     - Use context.set_shared_data(key, value) to pass data to next tools
     - Context is shared across all tools in a single execution chain
 
+    DataServiceClient Usage:
+    - Injected via Depends(require_data_service) - one instance per request
+    - Pre-configured with DATA_SERVICE_URL and authentication
+    - Simply call: await data_service.call(method="GET", endpoint="/path")
+    - No need to manually create ServiceClient or pass user_request
+
     Args:
         request: Tool request parameters (automatically validated by Pydantic)
         context: MCP context for accessing shared data across tool chains
+        data_service: Data service client for calling data service APIs
 
     Returns:
         ToolTemplateResponse with processed result and metadata
@@ -192,6 +207,37 @@ async def tool_template(
     # Example: If there was a previous result in the chain, append it
     if previous_result:
         result = f"{result}\n[Previous: {previous_result}]"
+
+    # ==================== Example: DataServiceClient Usage ====================
+    # Uncomment the following code to see how to use DataServiceClient
+    #
+    # # Simple GET request
+    # document_data = await data_service.call(
+    #     method="GET",
+    #     endpoint="/documents/123"
+    # )
+    #
+    # # GET with query parameters
+    # sections = await data_service.call(
+    #     method="GET",
+    #     endpoint="/article_structured_contents/overviews/{overview_id}/sections",
+    #     path_params={"overview_id": "some_id"},
+    #     query_params={"user_id": user_id} if user_id else {}
+    # )
+    #
+    # # POST with JSON body
+    # created = await data_service.call(
+    #     method="POST",
+    #     endpoint="/documents",
+    #     json_data={"title": "New Document", "content": result}
+    # )
+    #
+    # Benefits of DataServiceClient:
+    # ✅ No need to create ServiceClient manually
+    # ✅ No need to pass target_service_url (auto from config.DATA_SERVICE_URL)
+    # ✅ No need to pass user_request (auto forwarded for authentication)
+    # ✅ One instance per request (reused across multiple calls)
+    # ✅ Clean and simple API
 
     # ==================== 3. Build Metadata ====================
     metadata = {

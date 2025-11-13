@@ -9,4 +9,5 @@ Example:
 """
 
 # Import your tools here
-# from . import my_tool  # noqa: F401
+from . import example_tool  # noqa: F401
+from . import pdf_section_saver  # noqa: F401

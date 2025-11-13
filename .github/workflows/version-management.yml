@@ -1,0 +1,51 @@
+name: Version Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      pump_version:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  version-and-release:
+    name: Version & Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup codeArtifact, checkout and setup poetry
+        uses: OxSci-AI/oxsci-deploy/.github/actions/setup-codeartifact@main
+
+      - name: Auto version with Poetry
+        id: auto-version
+        uses: OxSci-AI/oxsci-deploy/.github/actions/auto-version-poetry@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version-bump: ${{ inputs.pump_version }}
+          branch: main
+          auto_version: true
+
+      - name: Create Release
+        uses: OxSci-AI/oxsci-deploy/.github/actions/create-release@main
+        with:
+          tag_name: ${{ steps.auto-version.outputs.version }}
+          release_name: "Release v${{ steps.auto-version.outputs.version }}"
+
+      - name: Summary
+        run: |
+          echo "## 📦 Version Management Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.auto-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version Bump:** ${{ inputs.pump_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Version updated and tag created" >> $GITHUB_STEP_SUMMARY
+          echo "✅ GitHub Release created" >> $GITHUB_STEP_SUMMARY

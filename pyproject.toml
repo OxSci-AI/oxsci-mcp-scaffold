@@ -18,7 +18,7 @@ uvicorn = ">=0.24.0"
 pydantic = ">=2.4.2"
 httpx = ">=0.25.1"
 oxsci-shared-core = { version = ">=0.5.0", source = "oxsci-ca" }
-oxsci-oma-mcp = { version = ">=0.1.5", source = "oxsci-ca" }
+oxsci-oma-mcp = { version = ">=0.2.7", source = "oxsci-ca" }
 # Optional: Add oxsci-shared-core for service integration
 # oxsci-shared-core = { version = ">=0.5.0", source = "oxsci-ca" }
 

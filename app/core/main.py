@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 from oxsci_oma_mcp import tool_router
-from oxsci_shared_core import default_router
+from oxsci_shared_core.router import default_router
 
 from app.core.config import config
 
